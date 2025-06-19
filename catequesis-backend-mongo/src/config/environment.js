@@ -13,14 +13,35 @@ const config = {
   // Configuración de MongoDB
   database: {
     uri: process.env.MONGODB_URI || 'mongodb://localhost:27017/catequesis',
+    // ✅ OPCIONES CORREGIDAS - Compatibles con versiones modernas
     options: {
-      // Opciones de conexión para MongoDB
-      maxPoolSize: 10, // Mantener hasta 10 conexiones en el pool
-      serverSelectionTimeoutMS: 5000, // Mantener intentando enviar operaciones por 5 segundos
-      socketTimeoutMS: 45000, // Cerrar sockets después de 45 segundos de inactividad
-      family: 4, // Usar IPv4, omitir IPv6
-      bufferMaxEntries: 0,
-      bufferCommands: false,
+      // Gestión del pool de conexiones
+      maxPoolSize: 10, // Reemplaza bufferMaxEntries
+      minPoolSize: 2,
+      maxIdleTimeMS: 30000,
+      
+      // Timeouts
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
+      connectTimeoutMS: 10000,
+      
+      // Configuración de red
+      family: 4, // Usar IPv4
+      
+      // Buffer y comandos
+      bufferCommands: false, // Deshabilitar buffering
+      
+      // Escritura
+      retryWrites: true,
+      w: 'majority',
+      
+      // Monitoreo
+      heartbeatFrequencyMS: 10000,
+      
+      // Solo en desarrollo
+      ...(process.env.NODE_ENV === 'development' && {
+        autoIndex: true,
+      })
     }
   },
 

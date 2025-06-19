@@ -26,8 +26,33 @@ class Database {
       // Configurar eventos de mongoose
       this.setupEventHandlers();
 
+      // ✅ CONFIGURACIÓN CORREGIDA - Opciones compatibles con versiones modernas
+      const connectionOptions = {
+        // Opciones de conexión básicas
+        maxPoolSize: 10, // Reemplaza maxPoolSize en lugar de bufferMaxEntries
+        serverSelectionTimeoutMS: 5000,
+        socketTimeoutMS: 45000,
+        family: 4, // Usar IPv4
+        
+        // Opciones de escritura
+        retryWrites: true,
+        w: 'majority',
+        
+        // Opciones de timeout
+        connectTimeoutMS: 10000,
+        
+        // Deshabilitar buffering (reemplaza bufferMaxEntries y bufferCommands)
+        bufferCommands: false,
+        maxIdleTimeMS: 30000,
+        
+        // Para desarrollo - opcional
+        ...(config.server.nodeEnv === 'development' && {
+          autoIndex: true, // Solo en desarrollo
+        })
+      };
+
       // Conectar a MongoDB
-      await mongoose.connect(config.database.uri, config.database.options);
+      await mongoose.connect(config.database.uri, connectionOptions);
 
       this.isConnected = true;
       this.connectionAttempts = 0;
@@ -50,13 +75,12 @@ class Database {
       // Intentar reconectar si no se han agotado los intentos
       if (this.connectionAttempts < this.maxRetries) {
         console.log(`🔄 Reintentando conexión en ${this.retryDelay/1000} segundos...`);
-        setTimeout(() => this.connect(), this.retryDelay);
+        await new Promise(resolve => setTimeout(resolve, this.retryDelay));
+        return this.connect();
       } else {
         console.error('💀 Se agotaron los intentos de conexión a MongoDB');
-        process.exit(1);
+        throw error;
       }
-      
-      throw error;
     }
   }
 
@@ -86,6 +110,7 @@ class Database {
     // Conexión exitosa
     mongoose.connection.on('connected', () => {
       console.log('🎉 Mongoose conectado a MongoDB');
+      this.isConnected = true;
     });
 
     // Error de conexión
@@ -104,6 +129,11 @@ class Database {
     mongoose.connection.on('reconnected', () => {
       console.log('🔄 Mongoose reconectado a MongoDB');
       this.isConnected = true;
+    });
+
+    // Buffer overflow (útil para debugging)
+    mongoose.connection.on('fullsetup', () => {
+      console.log('📡 Conexión completa establecida con todas las réplicas');
     });
 
     // Cierre graceful de la aplicación
@@ -133,7 +163,7 @@ class Database {
     };
 
     return {
-      isConnected: this.isConnected,
+      isConnected: this.isConnected && state === 1,
       readyState: state,
       stateDescription: states[state] || 'unknown',
       host: mongoose.connection.host,
@@ -206,14 +236,65 @@ class Database {
     try {
       console.log('📝 Creando índices...');
       
-      // Aquí se pueden agregar índices específicos cuando tengamos los modelos
-      // Ejemplo:
-      // await mongoose.model('Usuario').createIndexes();
-      // await mongoose.model('Catequizando').createIndexes();
+      // Crear índices para modelos específicos
+      const models = mongoose.modelNames();
       
-      console.log('✅ Índices creados exitosamente');
+      for (const modelName of models) {
+        try {
+          const Model = mongoose.model(modelName);
+          await Model.syncIndexes(); // Método más moderno que createIndexes()
+          console.log(`✅ Índices sincronizados para ${modelName}`);
+        } catch (error) {
+          console.warn(`⚠️ Error sincronizando índices para ${modelName}:`, error.message);
+        }
+      }
+      
+      console.log('✅ Sincronización de índices completada');
     } catch (error) {
-      console.error('Error creando índices:', error.message);
+      console.error('Error en sincronización de índices:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Verificar conexión con ping
+   */
+  async ping() {
+    try {
+      await mongoose.connection.db.admin().ping();
+      return true;
+    } catch (error) {
+      console.error('Error en ping a la base de datos:', error.message);
+      return false;
+    }
+  }
+
+  /**
+   * Obtener información de las colecciones
+   */
+  async getCollectionsInfo() {
+    try {
+      if (!this.isConnected) {
+        throw new Error('No hay conexión a la base de datos');
+      }
+
+      const collections = await mongoose.connection.db.listCollections().toArray();
+      
+      const collectionsInfo = await Promise.all(
+        collections.map(async (collection) => {
+          const stats = await mongoose.connection.db.collection(collection.name).stats();
+          return {
+            name: collection.name,
+            count: stats.count,
+            size: stats.size,
+            avgObjSize: stats.avgObjSize
+          };
+        })
+      );
+
+      return collectionsInfo;
+    } catch (error) {
+      console.error('Error obteniendo información de colecciones:', error.message);
       throw error;
     }
   }

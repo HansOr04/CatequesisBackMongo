@@ -4,20 +4,28 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 
+// Configuración
 const config = require('./config/environment');
 const database = require('./config/database');
+const { globalErrorHandler, logCriticalErrors } = require('./utils/errors');
 
-// Importar rutas (se crearán después)
-// const authRoutes = require('./routes/authRoutes');
-// const routes = require('./routes');
+// Rutas
+const authRoutes = require('./routes/authRoutes');
+const usuarioRoutes = require('./routes/usuarioRoutes');
+const parroquiaRoutes = require('./routes/parroquiaRoutes');
+const nivelRoutes = require('./routes/nivelRoutes');
+const catequizandoRoutes = require('./routes/catequizandoRoutes');
+const grupoRoutes = require('./routes/grupoRoutes');
+const inscripcionRoutes = require('./routes/inscripcionRoutes');
+const asistenciaRoutes = require('./routes/asistenciaRoutes');
 
 const app = express();
 
 /**
- * Configuración de middlewares de seguridad
+ * Configuración de seguridad
  */
 function setupSecurity() {
-  // Helmet para headers de seguridad
+  // Helmet para seguridad básica
   app.use(helmet({
     crossOriginEmbedderPolicy: false,
     contentSecurityPolicy: {
@@ -30,10 +38,10 @@ function setupSecurity() {
     },
   }));
 
-  // CORS configurado
+  // CORS
   app.use(cors({
-    origin: function (origin, callback) {
-      // Permitir solicitudes sin origin (móviles, Postman, etc.)
+    origin: (origin, callback) => {
+      // Permitir requests sin origin (mobile apps, postman, etc.)
       if (!origin) return callback(null, true);
       
       if (config.server.allowedOrigins.indexOf(origin) !== -1 || 
@@ -90,6 +98,9 @@ function setupMiddlewares() {
       next();
     });
   }
+
+  // Trust proxy (importante para rate limiting y obtener IPs reales)
+  app.set('trust proxy', 1);
 }
 
 /**
@@ -109,7 +120,8 @@ function setupRoutes() {
         state: dbHealth.stateDescription
       },
       uptime: process.uptime(),
-      memory: process.memoryUsage()
+      memory: process.memoryUsage(),
+      version: '1.0.0'
     });
   });
 
@@ -124,13 +136,13 @@ function setupRoutes() {
         health: '/health',
         endpoints: {
           auth: '/api/auth',
+          usuarios: '/api/usuarios',
           parroquias: '/api/parroquias',
           niveles: '/api/niveles',
           catequizandos: '/api/catequizandos',
           grupos: '/api/grupos',
           inscripciones: '/api/inscripciones',
-          asistencias: '/api/asistencias',
-          usuarios: '/api/usuarios'
+          asistencias: '/api/asistencias'
         }
       },
       timestamp: new Date().toISOString()
@@ -146,7 +158,8 @@ function setupRoutes() {
         return res.status(503).json({
           success: false,
           message: 'Base de datos no conectada',
-          details: dbHealth
+          details: dbHealth,
+          timestamp: new Date().toISOString()
         });
       }
 
@@ -173,14 +186,18 @@ function setupRoutes() {
     }
   });
 
-  // Rutas de autenticación (cuando estén listas)
-  // app.use('/api/auth', authRoutes);
+  // Rutas de la API
+  app.use('/api/auth', authRoutes);
+  app.use('/api/usuarios', usuarioRoutes);
+  app.use('/api/parroquias', parroquiaRoutes);
+  app.use('/api/niveles', nivelRoutes);
+  app.use('/api/catequizandos', catequizandoRoutes);
+  app.use('/api/grupos', grupoRoutes);
+  app.use('/api/inscripciones', inscripcionRoutes);
+  app.use('/api/asistencias', asistenciaRoutes);
 
-  // Otras rutas de la API (cuando estén listas)
-  // app.use('/api', routes);
-
-  // Ruta para endpoints no encontrados
-  app.use('*', (req, res) => {
+  // Middleware para rutas no encontradas
+  app.use((req, res) => {
     res.status(404).json({
       success: false,
       message: `Endpoint ${req.method} ${req.originalUrl} no encontrado`,
@@ -188,7 +205,14 @@ function setupRoutes() {
         info: 'GET /',
         health: 'GET /health',
         testDb: 'GET /test-db',
-        api: 'GET /api/*'
+        auth: '/api/auth/*',
+        usuarios: '/api/usuarios/*',
+        parroquias: '/api/parroquias/*',
+        niveles: '/api/niveles/*',
+        catequizandos: '/api/catequizandos/*',
+        grupos: '/api/grupos/*',
+        inscripciones: '/api/inscripciones/*',
+        asistencias: '/api/asistencias/*'
       },
       timestamp: new Date().toISOString()
     });
@@ -199,26 +223,14 @@ function setupRoutes() {
  * Configuración de manejo de errores
  */
 function setupErrorHandling() {
-  // Middleware de manejo de errores
+  // Middleware de logging de errores críticos
+  app.use(logCriticalErrors);
+
+  // Middleware global de manejo de errores
+  app.use(globalErrorHandler);
+
+  // Manejo de errores de JSON malformado
   app.use((error, req, res, next) => {
-    console.error('🚨 Error no manejado:', {
-      message: error.message,
-      stack: config.server.nodeEnv === 'development' ? error.stack : undefined,
-      url: req.originalUrl,
-      method: req.method,
-      timestamp: new Date().toISOString()
-    });
-
-    // Errores de CORS
-    if (error.message.includes('CORS')) {
-      return res.status(403).json({
-        success: false,
-        message: 'Origen no permitido por política CORS',
-        timestamp: new Date().toISOString()
-      });
-    }
-
-    // Errores de validación de JSON
     if (error instanceof SyntaxError && error.status === 400 && 'body' in error) {
       return res.status(400).json({
         success: false,
@@ -226,56 +238,30 @@ function setupErrorHandling() {
         timestamp: new Date().toISOString()
       });
     }
-
-    // Error genérico
-    res.status(error.status || 500).json({
-      success: false,
-      message: config.server.nodeEnv === 'production' 
-        ? 'Error interno del servidor' 
-        : error.message,
-      timestamp: new Date().toISOString()
-    });
-  });
-
-  // Manejar promesas rechazadas no capturadas
-  process.on('unhandledRejection', (reason, promise) => {
-    console.error('🚨 Promesa rechazada no manejada:', reason);
-    if (config.server.nodeEnv === 'production') {
-      // En producción, cerrar la aplicación de manera elegante
-      process.exit(1);
-    }
-  });
-
-  // Manejar excepciones no capturadas
-  process.on('uncaughtException', (error) => {
-    console.error('🚨 Excepción no capturada:', error);
-    process.exit(1);
+    next(error);
   });
 }
 
 /**
- * Inicializar la aplicación
+ * Inicializar aplicación
  */
-async function initializeApp() {
-  try {
-    // Configurar middlewares
-    setupSecurity();
-    setupMiddlewares();
-    setupRoutes();
-    setupErrorHandling();
-
-    console.log('✅ Aplicación Express configurada correctamente');
-    return app;
-  } catch (error) {
-    console.error('❌ Error inicializando aplicación:', error);
-    throw error;
-  }
+function initializeApp() {
+  console.log('🔧 Configurando seguridad...');
+  setupSecurity();
+  
+  console.log('🔧 Configurando middlewares...');
+  setupMiddlewares();
+  
+  console.log('🔧 Configurando rutas...');
+  setupRoutes();
+  
+  console.log('🔧 Configurando manejo de errores...');
+  setupErrorHandling();
+  
+  console.log('✅ Aplicación configurada correctamente');
 }
 
 // Inicializar la aplicación
-initializeApp().catch(error => {
-  console.error('💀 Error fatal inicializando aplicación:', error);
-  process.exit(1);
-});
+initializeApp();
 
 module.exports = app;
