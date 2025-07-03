@@ -114,42 +114,116 @@ class CatequizandoController {
    * Obtener catequizando por ID
    * GET /api/catequizandos/:id
    */
-  async getCatequizandoById(req, res) {
-    try {
-      const { id } = req.params;
+  /**
+ * Obtener catequizando por ID - Versión corregida
+ * GET /api/catequizandos/:id
+ */
+async getCatequizandoById(req, res) {
+  try {
+    const { id } = req.params;
 
-      const catequizando = await Catequizando.findById(id)
-        .populate('familia.hermanos', 'nombres apellidos documentoIdentidad');
+    console.log('🔍 Backend: Getting catequizando by ID:', id);
 
-      if (!catequizando) {
-        return res.status(404).json({
-          success: false,
-          message: 'Catequizando no encontrado'
-        });
-      }
-
-      // Agregar información adicional
-      const catequizandoCompleto = {
-        ...catequizando.toObject(),
-        edad: catequizando.calcularEdad(),
-        tieneCondicionesEspeciales: catequizando.tieneCondicionesEspeciales(),
-        contactosEmergencia: catequizando.obtenerContactosEmergencia()
-      };
-
-      return res.status(200).json({
-        success: true,
-        message: 'Catequizando obtenido exitosamente',
-        data: catequizandoCompleto
-      });
-
-    } catch (error) {
-      console.error('Error obteniendo catequizando:', error);
-      return res.status(500).json({
+    // Validar ObjectId
+    if (!id.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(400).json({
         success: false,
-        message: 'Error interno del servidor'
+        message: 'ID de catequizando inválido'
       });
     }
+
+    // ✅ Buscar catequizando sin populate problemático
+    const catequizando = await Catequizando.findById(id);
+
+    if (!catequizando) {
+      console.log('❌ Backend: Catequizando not found for ID:', id);
+      return res.status(404).json({
+        success: false,
+        message: 'Catequizando no encontrado'
+      });
+    }
+
+    console.log('✅ Backend: Catequizando found:', {
+      id: catequizando._id,
+      nombres: catequizando.nombres,
+      apellidos: catequizando.apellidos,
+      documento: catequizando.documentoIdentidad
+    });
+
+    // ✅ Crear respuesta segura - solo incluir métodos si existen
+    const catequizandoCompleto = catequizando.toObject();
+    
+    // Agregar campos calculados de forma segura
+    try {
+      if (typeof catequizando.calcularEdad === 'function') {
+        catequizandoCompleto.edad = catequizando.calcularEdad();
+      }
+    } catch (err) {
+      console.warn('⚠️ Backend: Error calculating age:', err.message);
+      catequizandoCompleto.edad = null;
+    }
+
+    try {
+      if (typeof catequizando.tieneCondicionesEspeciales === 'function') {
+        catequizandoCompleto.tieneCondicionesEspeciales = catequizando.tieneCondicionesEspeciales();
+      }
+    } catch (err) {
+      console.warn('⚠️ Backend: Error checking special conditions:', err.message);
+      catequizandoCompleto.tieneCondicionesEspeciales = false;
+    }
+
+    try {
+      if (typeof catequizando.obtenerContactosEmergencia === 'function') {
+        catequizandoCompleto.contactosEmergencia = catequizando.obtenerContactosEmergencia();
+      }
+    } catch (err) {
+      console.warn('⚠️ Backend: Error getting emergency contacts:', err.message);
+      catequizandoCompleto.contactosEmergencia = [];
+    }
+
+    console.log('✅ Backend: Returning catequizando data successfully');
+
+    return res.status(200).json({
+      success: true,
+      message: 'Catequizando obtenido exitosamente',
+      data: catequizandoCompleto
+    });
+
+  } catch (error) {
+    console.error('❌ Backend: Error obteniendo catequizando:', error);
+    console.error('❌ Backend: Error name:', error.name);
+    console.error('❌ Backend: Error message:', error.message);
+    
+    // Manejo específico de errores
+    if (error.name === 'CastError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Formato de ID inválido'
+      });
+    }
+    
+    if (error.name === 'StrictPopulateError') {
+      console.error('❌ Backend: StrictPopulateError - Schema mismatch');
+      return res.status(500).json({
+        success: false,
+        message: 'Error de configuración del modelo'
+      });
+    }
+    
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Error de validación de datos'
+      });
+    }
+    
+    // Error genérico
+    return res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor'
+    });
   }
+}
 
   /**
    * Buscar catequizando por documento
@@ -337,34 +411,68 @@ class CatequizandoController {
    * Eliminar catequizando
    * DELETE /api/catequizandos/:id
    */
-  async deleteCatequizando(req, res) {
+  /**
+ * Eliminar catequizando - Versión corregida
+ * DELETE /api/catequizandos/:id
+ */
+async deleteCatequizando(req, res) {
+  try {
+    const { id } = req.params;
+
+    console.log('🗑️ Backend: Attempting to delete catequizando:', id);
+    console.log('🗑️ Backend: User role:', req.user?.tipoPerfil);
+
+    // Validar ObjectId
+    if (!id.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(400).json({
+        success: false,
+        message: 'ID de catequizando inválido'
+      });
+    }
+
+    // Solo admin puede eliminar
+    if (req.user.tipoPerfil !== 'admin') {
+      console.log('❌ Backend: User not authorized to delete');
+      return res.status(403).json({
+        success: false,
+        message: 'Solo los administradores pueden eliminar catequizandos'
+      });
+    }
+
+    // ✅ Buscar catequizando sin populate problemático
+    const catequizando = await Catequizando.findById(id);
+
+    if (!catequizando) {
+      console.log('❌ Backend: Catequizando not found for deletion:', id);
+      return res.status(404).json({
+        success: false,
+        message: 'Catequizando no encontrado'
+      });
+    }
+
+    console.log('✅ Backend: Catequizando found for deletion:', {
+      id: catequizando._id,
+      nombres: catequizando.nombres,
+      apellidos: catequizando.apellidos
+    });
+
+    // ✅ Verificar dependencias de forma segura
     try {
-      const { id } = req.params;
-
-      // Solo admin puede eliminar
-      if (req.user.tipoPerfil !== 'admin') {
-        return res.status(403).json({
-          success: false,
-          message: 'Solo los administradores pueden eliminar catequizandos'
-        });
-      }
-
-      const catequizando = await Catequizando.findById(id);
-
-      if (!catequizando) {
-        return res.status(404).json({
-          success: false,
-          message: 'Catequizando no encontrado'
-        });
-      }
-
-      // Verificar dependencias
+      console.log('🔍 Backend: Checking dependencies...');
+      
       const [inscripcionesCount, certificadosCount] = await Promise.all([
         Inscripcion.countDocuments({ catequizando: id }),
-        Certificado.countDocuments({ catequizando: id })
+        // Si el modelo Certificado no existe, usar 0
+        Certificado ? Certificado.countDocuments({ catequizando: id }) : Promise.resolve(0)
       ]);
 
+      console.log('📊 Backend: Dependencies found:', {
+        inscripciones: inscripcionesCount,
+        certificados: certificadosCount
+      });
+
       if (inscripcionesCount > 0 || certificadosCount > 0) {
+        console.log('❌ Backend: Cannot delete - has dependencies');
         return res.status(409).json({
           success: false,
           message: 'No se puede eliminar el catequizando porque tiene inscripciones o certificados asociados',
@@ -374,23 +482,65 @@ class CatequizandoController {
           }
         });
       }
+    } catch (depError) {
+      console.error('⚠️ Backend: Error checking dependencies:', depError);
+      // Continuar con la eliminación si no se pueden verificar las dependencias
+      console.log('⚠️ Backend: Proceeding with deletion despite dependency check error');
+    }
 
-      await Catequizando.findByIdAndDelete(id);
+    // ✅ Eliminar catequizando
+    console.log('🗑️ Backend: Proceeding with deletion...');
+    const deletedCatequizando = await Catequizando.findByIdAndDelete(id);
 
-      return res.status(200).json({
-        success: true,
-        message: 'Catequizando eliminado exitosamente',
-        data: catequizando
-      });
-
-    } catch (error) {
-      console.error('Error eliminando catequizando:', error);
+    if (!deletedCatequizando) {
+      console.log('❌ Backend: Failed to delete catequizando');
       return res.status(500).json({
         success: false,
-        message: 'Error interno del servidor'
+        message: 'Error al eliminar el catequizando'
       });
     }
+
+    console.log('✅ Backend: Catequizando deleted successfully');
+
+    return res.status(200).json({
+      success: true,
+      message: 'Catequizando eliminado exitosamente',
+      data: {
+        _id: deletedCatequizando._id,
+        nombres: deletedCatequizando.nombres,
+        apellidos: deletedCatequizando.apellidos,
+        documentoIdentidad: deletedCatequizando.documentoIdentidad
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Backend: Error eliminando catequizando:', error);
+    console.error('❌ Backend: Error name:', error.name);
+    console.error('❌ Backend: Error message:', error.message);
+    console.error('❌ Backend: Error stack:', error.stack);
+    
+    // Manejo específico de errores
+    if (error.name === 'CastError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Formato de ID inválido'
+      });
+    }
+    
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Error de validación'
+      });
+    }
+    
+    // Error genérico
+    return res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor al eliminar catequizando'
+    });
   }
+}
 
   /**
    * Obtener inscripciones de un catequizando
